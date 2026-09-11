@@ -1,0 +1,5 @@
+sources:
+  bigtable_source:
+    kind: bigtable
+    project: antigravity-503007
+    instance: operations-db
