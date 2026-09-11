@@ -41,6 +41,8 @@ DEFAULT_BIGTABLE_TABLE_ID = "cashier_realtime_alerts"
 DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 DEFAULT_EMBEDDING_ENDPOINT = "text-embedding-005"
 DEFAULT_RAG_SIMILARITY_THRESHOLD = 0.70
+DEFAULT_BQ_TELEMETRY_DATASET = "agent_telemetry"
+DEFAULT_BQ_TELEMETRY_TABLE = "events"
 
 _PROJECT_ENV_VARS = (
     "PROJECT_ID",
@@ -169,6 +171,41 @@ def get_rag_similarity_threshold() -> float:
         return DEFAULT_RAG_SIMILARITY_THRESHOLD
 
 
+@functools.lru_cache(maxsize=1)
+def get_bq_telemetry_dataset() -> str:
+    """BigQuery dataset receiving the ADK agent analytics event stream."""
+    return _env("BQ_TELEMETRY_DATASET") or DEFAULT_BQ_TELEMETRY_DATASET
+
+
+@functools.lru_cache(maxsize=1)
+def get_bq_telemetry_table() -> str:
+    """BigQuery table receiving the ADK agent analytics event stream."""
+    return _env("BQ_TELEMETRY_TABLE") or DEFAULT_BQ_TELEMETRY_TABLE
+
+
+@functools.lru_cache(maxsize=1)
+def get_bq_telemetry_location() -> str:
+    """BigQuery location of the telemetry dataset.
+
+    Defaults to :func:`get_region` because the dataset is provisioned alongside the
+    agent runtime; override with ``BQ_TELEMETRY_LOCATION`` for multi-region datasets.
+    """
+    return _env("BQ_TELEMETRY_LOCATION") or get_region()
+
+
+@functools.lru_cache(maxsize=1)
+def is_telemetry_enabled() -> bool:
+    """Whether the BigQuery agent analytics plugin should be attached.
+
+    Enabled by default. Set ``ENABLE_BQ_TELEMETRY=false`` to run the agent without
+    streaming telemetry (useful for offline unit tests or air-gapped environments).
+    """
+    raw = _env("ENABLE_BQ_TELEMETRY")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def reset_cache() -> None:
     """Clears memoized values (used by tests that patch the environment)."""
     for resolver in (
@@ -183,5 +220,9 @@ def reset_cache() -> None:
         get_gemini_model,
         get_embedding_endpoint,
         get_rag_similarity_threshold,
+        get_bq_telemetry_dataset,
+        get_bq_telemetry_table,
+        get_bq_telemetry_location,
+        is_telemetry_enabled,
     ):
         resolver.cache_clear()

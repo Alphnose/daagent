@@ -18,7 +18,7 @@ os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ.get("GOOGLE_CLOUD_LOCATION", "g
 from google.genai import types
 from google.adk.runners import Runner
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
-from app.agent import cymbal_operations_agent
+from app.agent import app as telemetry_app, cymbal_operations_agent
 
 USE_CASES = [
     {
@@ -134,8 +134,11 @@ async def execute_test(runner, session_id, uc):
 
 async def main():
     session_svc = InMemorySessionService()
-    runner = Runner(agent=cymbal_operations_agent, app_name="cymbal_ops_app", session_service=session_svc)
-    session = await session_svc.create_session(app_name="cymbal_ops_app", user_id="test_runner")
+    # Driving the Runner from the App (rather than the bare agent) activates the
+    # BigQueryAgentAnalyticsPlugin, so every run streams telemetry to BigQuery.
+    app_name = telemetry_app.name
+    runner = Runner(app=telemetry_app, session_service=session_svc)
+    session = await session_svc.create_session(app_name=app_name, user_id="test_runner")
     
     results = []
     for uc in USE_CASES:
