@@ -7,9 +7,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Ensure Vertex AI environment with global location for gemini-3.6-flash
+from app.config import get_project_id
+
+# Ensure Vertex AI environment with global location for the coordinator model.
+# The project is resolved from PROJECT_ID / GOOGLE_CLOUD_PROJECT / ADC - never hardcoded.
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "True"
-os.environ["GOOGLE_CLOUD_PROJECT"] = os.environ.get("PROJECT_ID", "antigravity-503007")
+os.environ["GOOGLE_CLOUD_PROJECT"] = get_project_id()
 os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 
 from google.genai import types
@@ -97,8 +100,18 @@ async def execute_test(runner, session_id, uc):
     if uc["id"] == "UC 1.1a":
         assert "pos_troubleshooting_rag_tool" in tool_names or "Toshiba" in full_response, "UC 1.1a failed RAG check"
     elif uc["id"] == "UC 1.1c":
-        # Out-of-scope inquiry must trigger warning/decline or boundary rejection
-        assert "WARNING" in full_response or "not found" in full_response.lower() or "outside" in full_response.lower() or "cannot" in full_response.lower() or "decline" in full_response.lower(), "UC 1.1c failed guardrail warning check"
+        # Out-of-scope inquiry must surface the certified decline contract, not guidance.
+        lowered = full_response.lower()
+        assert "pos_troubleshooting_rag_tool" in tool_names, (
+            "UC 1.1c must consult certified documentation before declining"
+        )
+        assert (
+            "uncertified result" in lowered
+            or "out of scope" in lowered
+            or "outside" in lowered
+            or "cannot" in lowered
+            or "decline" in lowered
+        ), "UC 1.1c failed certified decline guardrail check"
     elif uc["id"] == "UC 1.2a":
         assert "cymbal_analytics_tool" in tool_names or "inventory" in full_response.lower(), "UC 1.2a failed analytics tool check"
     elif uc["id"] == "UC 1.3":

@@ -1,18 +1,57 @@
+# =============================================================================
+# MCP Toolbox for Databases - declarative tool contract (Cymbal Operations)
+# -----------------------------------------------------------------------------
+# This file is the SINGLE SOURCE OF TRUTH for the Bigtable tools exposed by the
+# `mcp-toolbox-bigtable` Cloud Run microservice. It is intentionally
+# environment-agnostic: ${PROJECT_ID} / ${BIGTABLE_INSTANCE_ID} /
+# ${BIGTABLE_TABLE_ID} are rendered at deploy time by `make mcp-render`
+# (envsubst) before being pushed to Secret Manager, so the same template can be
+# deployed to dev / staging / prod without editing code.
+#
+# Deploy with:  make mcp-deploy
+# =============================================================================
+
 sources:
   bigtable_source:
     kind: bigtable
-    project: antigravity-503007
-    instance: operations-db
+    project: ${PROJECT_ID}
+    instance: ${BIGTABLE_INSTANCE_ID}
 
 tools:
   read_cashier_realtime_metrics:
     kind: bigtable-sql
     source: bigtable_source
-    description: "Reads live 1-hour rolling metrics, anomaly risk score, and audit status flags for a cashier from Cloud Bigtable table cashier_realtime_alerts."
+    description: >-
+      Reads live 1-hour rolling operational metrics, anomaly risk score and audit
+      status flags for a specific cashier at a specific store from the Cloud
+      Bigtable real-time alert ledger. Use this for any question about a
+      cashier's CURRENT / LIVE / RIGHT NOW behaviour (transaction count, manual
+      override count, promo rate, discount totals, risk score, audit status).
+      Row keys are formatted as `<STORE_ID>#<CASHIER_ID>#<REVERSE_TIMESTAMP>`,
+      so pass the prefix `STORE_048#CASH_1190` to retrieve the newest record.
+    statement: |
+      SELECT
+        CAST(_key AS STRING) AS row_key,
+        TO_INT64(stats['cashier_1h_txn_count']) AS cashier_1h_txn_count,
+        TO_INT64(stats['cashier_1h_manual_override_count']) AS cashier_1h_manual_override_count,
+        TO_INT64(stats['cashier_1h_promo_count']) AS cashier_1h_promo_count,
+        TO_FLOAT64(stats['cashier_1h_avg_discount_pct']) AS cashier_1h_avg_discount_pct,
+        TO_FLOAT64(stats['cashier_1h_total_discount_usd']) AS cashier_1h_total_discount_usd,
+        TO_FLOAT64(stats['cashier_1h_promo_rate']) AS cashier_1h_promo_rate,
+        TO_FLOAT64(stats['risk_score']) AS risk_score,
+        CAST(stats['last_event_ts'] AS STRING) AS last_event_ts,
+        CAST(flags['audit_status'] AS STRING) AS audit_status
+      FROM `${BIGTABLE_TABLE_ID}`(WITH_HISTORY => FALSE)
+      WHERE STARTS_WITH(_key, CAST(@row_key_prefix AS BYTES))
+      LIMIT 1
     parameters:
-      store_id:
+      - name: row_key_prefix
         type: string
-        description: "Store identifier, e.g. STORE_048"
-      cashier_id:
-        type: string
-        description: "Cashier identifier, e.g. CASH_1190"
+        description: >-
+          Bigtable row key prefix combining store and cashier identifiers, e.g.
+          `STORE_048#CASH_1190`. Store ids are zero padded to 3 digits
+          (`STORE_048`) and cashier ids are prefixed with `CASH_`.
+
+toolsets:
+  cymbal_operations:
+    - read_cashier_realtime_metrics

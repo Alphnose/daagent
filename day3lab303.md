@@ -122,3 +122,69 @@
 7. **測試驗證通過率**:
    - `make test`: **6 passed in 25.99s** (100% 通過)
    - `make test-e2e`: **All 7 use cases verified with strict assertions** (100% 通過)
+
+---
+
+## 🏗️ Part 6: 第二輪架構稽核修復 (Production Readiness Audit — Round 2)
+
+第二輪評審指出三項關鍵缺失，已全數根因修復並附上驗證證據。
+
+### 6.1 GCP Project ID 硬編碼 → 完全外部化
+
+| 項目 | 修復內容 |
+| :--- | :--- |
+| 新增 `app/config.py` | 集中式延遲解析器，順序為 `PROJECT_ID` → `GOOGLE_CLOUD_PROJECT` → `GCLOUD_PROJECT`/`GCP_PROJECT` → **ADC 綁定專案**；皆無法解析時拋出可行動的 `ConfigurationError` |
+| `rag_tool.py` / `bigtable_tool.py` / `analytics_tool.py` / `agent.py` / `run_all_tests.py` | 移除所有 `"antigravity-503007"` 預設值，改為呼叫 `get_project_id()`、`get_data_agent_name()`、`get_chunk_embeddings_table()` 等解析函式 |
+| `tools.yaml` | 改為 `${PROJECT_ID}` / `${BIGTABLE_INSTANCE_ID}` / `${BIGTABLE_TABLE_ID}` 樣板，部署時由 `scripts/deploy_mcp.sh` 以 `envsubst` 渲染 |
+| `.env.example` / `Dockerfile` / `Makefile` | 全面改為佔位符與執行期注入，映像檔不含任何專案識別碼 |
+| 回歸防護 | `tests/test_configuration.py::test_no_hardcoded_project_id_in_source` **靜態掃描**整個原始碼樹，任何硬編碼專案 ID 會使測試失敗 |
+
+### 6.2 MCP Server 被繞過 → 路由與 OIDC 根因修復
+
+實測診斷結果（`curl` + ADK 雙軌驗證）：
+
+| 症狀 | 根因 | 修復 |
+| :--- | :--- | :--- |
+| 立即回退本地 gRPC client | 舊程式連到 `/sse`，Database Toolbox 實際端點為 `/mcp`（Streamable HTTP）與 `/mcp/sse`；`/sse` 回傳 **HTTP 404** | 改用 `StreamableHTTPConnectionParams(url=f"{base}/mcp")` |
+| `tools/list` 回傳 `[]`（宣告式設定形同死碼） | Secret Manager 內的 `tools.yaml` **只有 `sources`、沒有 `tools`**，Toolbox 因此無工具可服務 | 補齊 `tools` + `toolsets`，撰寫合法 `bigtable-sql` `statement`，重新推送 Secret 版本並重新部署 Cloud Run |
+| `bigtable-sql` 執行失敗 | `_key` 為 BYTES（`LIKE` 型別不符）、`CAST(BYTES AS INT64)` 不被支援、`risk_score`/`last_event_ts` 實際位於 `stats` 而非 `flags` | 改用 `STARTS_WITH(_key, CAST(@row_key_prefix AS BYTES))`、`TO_INT64()` / `TO_FLOAT64()`、修正 column family，並加上 `(WITH_HISTORY => FALSE)` |
+| ADK 交握 **403 Forbidden**（curl 卻成功） | ① `header_provider` 僅套用於工具呼叫，**不含 MCP session 交握**；② Cloudtop 的 ADC 解析為共用服務帳號 `insecure-cloudtop-shared-user@...`，雖能簽發正確 `aud` 的權杖，卻**無 `roles/run.invoker`** | ① 同時將 Bearer 權杖寫入 `connection_params.headers`；② 新增**認證預檢探測** `_probe_endpoint()`，實際打 Cloud Run 驗證憑證是否被 IAM 接受，並依 audience 快取勝出策略 |
+| 權杖跨端點污染 | 全域單一權杖快取被其他 audience 的權杖覆寫 | 權杖與策略快取改為 **以 audience 為鍵** |
+
+其他強化：
+
+- `BIGTABLE_MCP_REQUIRED=true` 可關閉本地回退，**直接失敗**而非靜默降級（建議生產環境啟用）。
+- 回退發生時輸出 `ERROR` / `WARNING` 日誌，明確指出是端點、授權或空工具清單問題。
+- 新增 `scripts/deploy_mcp.sh`（render → Secret Manager → Cloud Run → verify）與 `make mcp-render / mcp-deploy / mcp-verify`。
+
+**實測證據**（`tools/call`，來自線上 Cloud Run MCP 微服務）：
+
+```json
+{"audit_status":"clear","cashier_1h_avg_discount_pct":65.53975808109857,
+ "cashier_1h_manual_override_count":35,"cashier_1h_promo_count":39,
+ "cashier_1h_promo_rate":0.8297872340425532,"cashier_1h_total_discount_usd":10996.49,
+ "cashier_1h_txn_count":47,"last_event_ts":"2026-09-11T03:27:08.796Z",
+ "row_key":"STORE_048#CASH_1190#9221582939625979807"}
+```
+
+### 6.3 RAG 拒絕字串不符規格 → 對齊契約
+
+標準字串已更新為明確標示 **UNCERTIFIED RESULT**、門檻值與 out-of-scope 判定：
+
+```
+WARNING: UNCERTIFIED RESULT - No certified POS troubleshooting documentation matched
+this query above the 0.70 similarity threshold. This request appears to be out of
+scope for Cymbal Superstore POS operations. No troubleshooting guidance can be provided.
+```
+
+- `prompts.py` 要求 coordinator **逐字轉述**該警告，且不得以模型知識補充替代建議。
+- `test_mandatory_decline_warning_contract` 進行**逐字比對**，`test_uc_1_1c_out_of_scope_returns_exact_mandatory_warning` 驗證 Ford F-150 情境確實以該字串開頭。
+
+### 6.4 驗證結果
+
+| 測試指令 | 範圍 | 結果 |
+| :--- | :--- | :--- |
+| `make test-unit` | 離線（設定可移植性、硬編碼掃描、MCP 路由/授權接線、宣告式契約、護欄、綁定） | **17 passed** ✅ |
+| `make test` | 離線 + 線上契約（OIDC、`tools/list`、`tools/call`、RAG、Data Agent、Bigtable、Coordinator 調度） | **25 passed in 36.71s** ✅ |
+| `make mcp-verify` | 線上 MCP 契約 | 回傳 `read_cashier_realtime_metrics` 完整 schema ✅ |
+

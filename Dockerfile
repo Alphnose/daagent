@@ -1,44 +1,47 @@
-# Production Dockerfile for ADK Cymbal Operations Coordinator Agent
+# =============================================================================
+# Production container - ADK Cymbal Operations Coordinator Agent
+#
+# The image carries NO environment-specific identifier. PROJECT_ID and every
+# other setting are injected at runtime (`--env-file .env`, Cloud Run
+# `--set-env-vars`, or the metadata server via ADC).
+# =============================================================================
 FROM python:3.11-slim
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/srv \
     PORT=8080 \
     GOOGLE_GENAI_USE_VERTEXAI=True \
-    GOOGLE_CLOUD_LOCATION=global \
-    GEMINI_MODEL=gemini-3.6-flash
+    GOOGLE_CLOUD_LOCATION=global
 
-# Set working directory
-WORKDIR /app
+WORKDIR /srv
 
-# Install system dependencies
+# System dependencies (curl is used by the health check)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency manifests
+# Python dependencies (cached layer)
 COPY requirements.txt ./
-
-# Install python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir pytest pytest-asyncio pyyaml
 
-# Copy application source code and configuration
+# Application source, declarative MCP contract and quality gates
 COPY app/ ./app/
 COPY tests/ ./tests/
-COPY tools.yaml ./
-COPY run_all_tests.py ./
-COPY Makefile ./
+COPY scripts/ ./scripts/
+COPY tools.yaml pytest.ini run_all_tests.py Makefile ./
 
-# Expose Web UI / API port
+# Run as an unprivileged user
+RUN useradd --create-home --uid 1000 agent && chown -R agent:agent /srv
+USER agent
+
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/ || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -fsS http://localhost:8080/ || exit 1
 
-# Default entrypoint starts the ADK Web UI
-CMD ["adk", "web", "app", "--host", "0.0.0.0", "--port", "8080"]
+# ADK Web UI / API server. Cloud Run injects $PORT.
+CMD exec adk web app --host 0.0.0.0 --port ${PORT}

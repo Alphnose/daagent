@@ -1,6 +1,5 @@
 """Analytics tool leveraging the published BigQuery Conversational Data Agent."""
 
-import os
 import time
 from typing import Any, Dict
 import google.auth
@@ -10,12 +9,9 @@ from google.adk.tools.data_agent.data_agent_tool import ask_data_agent, DataAgen
 
 import logging
 
-logger = logging.getLogger(__name__)
+from app.config import get_data_agent_name
 
-DATA_AGENT_NAME = os.environ.get(
-    "DATA_AGENT_NAME",
-    "projects/antigravity-503007/locations/global/dataAgents/cymbal-retail-analytics-data-agent"
-)
+logger = logging.getLogger(__name__)
 
 _creds = None
 
@@ -47,7 +43,7 @@ def cymbal_analytics_tool(query: str) -> str:
         try:
             creds = get_credentials()
             result = ask_data_agent(
-                data_agent_name=DATA_AGENT_NAME,
+                data_agent_name=get_data_agent_name(),
                 query=query,
                 credentials=creds,
                 settings=settings,
