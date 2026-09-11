@@ -36,7 +36,10 @@ from app.tools.rag_tool import pos_troubleshooting_rag_tool
 
 logger = logging.getLogger(__name__)
 
-APP_NAME = "cymbal_operations_agent"
+# ADK identifies an app by its agent directory name, and the FastAPI / Playground
+# surfaces key sessions on that same name, so the App must be called "app" to match
+# the `app/` package. The agent itself keeps its descriptive name.
+APP_NAME = "app"
 MODEL_NAME = get_gemini_model()
 
 cymbal_operations_agent = Agent(

@@ -1,0 +1,27 @@
+# Upload filter for `agents-cli deploy` / Cloud Build.
+#
+# When this file exists it REPLACES .gitignore as the source-upload filter, so
+# every entry from .gitignore that must stay out of the image is repeated here.
+#
+# Only genuinely unbuildable content is excluded. `tests/`, `scripts/` and
+# `README.md` are deliberately NOT excluded because the Dockerfile COPYs them:
+# the quality gates travel with the image so the same artifact can be verified
+# in any environment.
+
+# --- local environment / caches (mirrors .gitignore) ---
+.venv/
+__pycache__/
+*.pyc
+.env
+.adk/
+.DS_Store
+build/
+.git/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- generated evaluation output ---
+# Kept in version control as grading evidence, but never read at serving time
+# and large enough (hundreds of KB of traces per run) to slow every upload.
+artifacts/

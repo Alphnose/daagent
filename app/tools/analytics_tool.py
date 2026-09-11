@@ -1,5 +1,6 @@
 """Analytics tool leveraging the published BigQuery Conversational Data Agent."""
 
+import re
 import time
 from typing import Any, Dict
 import google.auth
@@ -14,6 +15,21 @@ from app.config import get_data_agent_name
 logger = logging.getLogger(__name__)
 
 _creds = None
+
+# BRD NFR-4.1 forbids exposing infrastructure internals in a user-facing answer,
+# and the Data Agent emits fully-qualified `project.dataset.table` references.
+# The dataset and table are the operationally meaningful part - only the project
+# qualifier is redacted, so the operator can still audit which table and which
+# partition window were scanned.
+_QUALIFIED_TABLE = re.compile(
+    r"`(?P<project>[a-z][a-z0-9-]{4,28})\.(?P<rest>[A-Za-z_]\w*\.[A-Za-z_]\w*)`"
+)
+
+
+def _redact_project(sql: str) -> str:
+    """Rewrites `project.dataset.table` to `dataset.table` in generated SQL."""
+    return _QUALIFIED_TABLE.sub(lambda m: f"`{m.group('rest')}`", sql)
+
 
 def get_credentials():
     global _creds
@@ -55,30 +71,54 @@ def cymbal_analytics_tool(query: str) -> str:
                 final_text = ""
                 sql_text = ""
                 data_retrieved = None
-                
+
                 for item in responses:
                     if "text" in item and item["text"].get("textType") == "FINAL_RESPONSE":
                         final_text = "\n".join(item["text"].get("parts", []))
                     if "data" in item and "generatedSql" in item["data"]:
                         sql_text = item["data"]["generatedSql"]
-                    if "Data Retrieved" in item:
+                    # Superseded intermediate results are replaced by the literal
+                    # string "Intermediate result omitted", so only accept a dict.
+                    if isinstance(item.get("Data Retrieved"), dict):
                         data_retrieved = item["Data Retrieved"]
-                        
+
                 output_parts = []
                 if final_text:
                     output_parts.append(final_text)
-                elif data_retrieved:
+
+                # The rows are appended unconditionally, NOT as a fallback for a
+                # missing summary. The Data Agent's FINAL_RESPONSE is a narrative
+                # ("here are the top 20 positions...") that names the result set
+                # without containing it; returning only that narrative leaves the
+                # coordinator with nothing to ground on, and it fabricates a
+                # plausible table instead. Forwarding the rows is what makes the
+                # coordinator's answer verifiable.
+                if data_retrieved:
                     headers = data_retrieved.get("headers", [])
                     rows = data_retrieved.get("rows", [])
-                    output_parts.append(f"Retrieved {len(rows)} rows: {headers}")
-                    for r in rows[:10]:
+                    summary = data_retrieved.get("summary", f"Showing {len(rows)} rows.")
+                    output_parts.append(
+                        f"\n[Data Retrieved] {summary}\nColumns: {headers}"
+                    )
+                    for r in rows:
                         output_parts.append(str(r))
-                else:
+                elif not final_text:
                     output_parts.append("Query succeeded but returned no explicit final text.")
-                    
+
+                if not data_retrieved:
+                    # Makes the empty result explicit so the coordinator reports
+                    # "no rows" rather than filling the gap from model memory.
+                    output_parts.append(
+                        "\n[Data Retrieved] NONE - the Data Agent returned no tabular "
+                        "result for this question. Do not invent rows; report that no "
+                        "data was returned and offer to refine the question."
+                    )
+
                 if sql_text:
-                    output_parts.append(f"\n[Generated SQL]:\n```sql\n{sql_text}\n```")
-                    
+                    output_parts.append(
+                        f"\n[Generated SQL]:\n```sql\n{_redact_project(sql_text)}\n```"
+                    )
+
                 return "\n".join(output_parts)
             else:
                 last_error = f"Data Agent status: {result.get('status')}, response: {result.get('response')}"

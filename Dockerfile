@@ -1,47 +1,38 @@
 # =============================================================================
-# Production container - ADK Cymbal Operations Coordinator Agent
+# Production container - Cymbal Superstores Operations Coordinator Agent
+#
+# Serves the ADK FastAPI surface (adk_api + A2A + reasoning_engine routes), which
+# is what Vertex AI Agent Runtime and the Cloud Console Playground call.
 #
 # The image carries NO environment-specific identifier. PROJECT_ID and every
-# other setting are injected at runtime (`--env-file .env`, Cloud Run
-# `--set-env-vars`, or the metadata server via ADC).
+# other setting are injected at runtime (Agent Runtime deployment_spec.env,
+# Cloud Run --set-env-vars, or `docker run --env-file .env`).
 # =============================================================================
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/srv \
-    PORT=8080 \
-    GOOGLE_GENAI_USE_VERTEXAI=True \
-    GOOGLE_CLOUD_LOCATION=global
+    PORT=8080
 
-WORKDIR /srv
+RUN pip install --no-cache-dir uv==0.8.13
 
-# System dependencies (curl is used by the health check)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /code
 
-# Python dependencies (cached layer)
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir pytest pytest-asyncio pyyaml
+# Dependency layer. `uv sync --frozen` refuses to re-resolve, so the image is
+# reproducible and inherits the public-PyPI index pinned in pyproject.toml.
+COPY ./pyproject.toml ./README.md ./uv.lock* ./
+COPY ./app ./app
+RUN uv sync --frozen --no-dev
 
-# Application source, declarative MCP contract and quality gates
-COPY app/ ./app/
-COPY tests/ ./tests/
-COPY scripts/ ./scripts/
-COPY tools.yaml pytest.ini run_all_tests.py Makefile ./
+# Declarative MCP contract and quality gates travel with the image so the same
+# artifact can be verified in any environment.
+COPY ./tools.yaml ./pytest.ini ./run_all_tests.py ./
+COPY ./tests ./tests
+COPY ./scripts ./scripts
 
-# Run as an unprivileged user
-RUN useradd --create-home --uid 1000 agent && chown -R agent:agent /srv
-USER agent
+ARG AGENT_VERSION=1.0.0
+ENV AGENT_VERSION=${AGENT_VERSION}
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -fsS http://localhost:8080/ || exit 1
-
-# ADK Web UI / API server. Cloud Run injects $PORT.
-CMD exec adk web app --host 0.0.0.0 --port ${PORT}
+CMD ["sh", "-c", "uv run uvicorn app.fast_api_app:app --host 0.0.0.0 --port ${PORT}"]

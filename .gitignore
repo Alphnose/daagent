@@ -5,3 +5,12 @@ __pycache__/
 .adk/
 .DS_Store
 build/
+.google-agents-cli/
+
+# Raw per-run evaluation output. Regenerated on every `agents-cli eval` call and
+# large enough to swamp the diff. The curated final results that back
+# tests/eval/evaluation_report.md are kept under artifacts/evidence/.
+artifacts/*
+!artifacts/evidence/
+!artifacts/bqca/
+!artifacts/deployment/

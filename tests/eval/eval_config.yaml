@@ -1,0 +1,207 @@
+# =============================================================================
+# Cymbal Superstores Operations Agent — evaluation configuration
+#
+# Scoring strategy
+# ----------------
+# The deployment Quality Gate is expressed as ">= 4.0 / 5.0". Built-in Agent
+# Platform metrics report on a 0.0-1.0 scale, so their gate equivalent is 0.80
+# (0.80 x 5 = 4.0). Every custom metric below deliberately returns a 1-5 integer
+# so it can be read against the gate directly with no conversion.
+#
+# Metric versions are pinned to _v1 on purpose. v2/v3 metric specs require a
+# Gemini 3.5 Flash judge that is not available in every region (notably
+# us-central1); pinning keeps this suite runnable in any lab project.
+#
+# Cost discipline
+# ---------------
+# Three different custom-metric mechanisms are used, chosen per requirement:
+#   * inline code metrics       -> zero tokens, zero latency, hard pass/fail
+#   * declarative prompt judge  -> one Flash call, self-consistency sampled
+#   * file-based judge          -> full Python, schema-constrained output
+# Deterministic contracts (PII, infrastructure leakage, partition filters) are
+# never sent to an LLM: a regex is both cheaper and stricter than a judge.
+# =============================================================================
+
+metrics_to_run:
+  # --- Built-in Agent Platform metrics (Quality Gate metrics) ---------------
+  - tool_use_quality_v1          # tool selection, parameter accuracy, step sequence
+  - final_response_quality_v1    # final answer quality judged against the trajectory
+  - safety_v1                    # PII / harmful content policy compliance
+  # NOTE: `grounding_v1` is intentionally NOT run here. It renders a prompt template
+  # that hard-requires a pre-populated `context` field on every eval case, which only
+  # exists on already-graded trace files. It is therefore applied to the provided
+  # baseline trace (Challenge 2.1) via `eval grade`, not to freshly generated traces.
+  # `final_response_quality_v1` is the agent-aware equivalent for this suite: it judges
+  # the answer against the intermediate tool outputs captured in `agent_data`.
+
+  # --- Project-specific metrics --------------------------------------------
+  - guardrail_compliance       # file-based LLM judge over the 5 BRD guardrails
+  - routing_precision          # declarative LLM judge over specialist tool choice
+  - no_infrastructure_leak     # deterministic: NFR-4.1 / NFR-1.2
+  - partition_filter_discipline # deterministic: NFR-3.3
+
+# `metrics_to_run` is the SINGLE-TURN set (eval-data.json). The multi-turn set
+# (eval-data2.json) is selected on the command line because three of the metrics
+# above are rejected outright on multi-turn agent data:
+#
+#   agents-cli eval run \
+#     --dataset tests/eval/datasets/eval-data2.json \
+#     --config  tests/eval/eval_config.yaml \
+#     --metrics multi_turn_tool_use_quality_v1,multi_turn_trajectory_quality_v1,\
+# multi_turn_task_success_v1,guardrail_compliance,routing_precision_multiturn,\
+# no_infrastructure_leak,partition_filter_discipline
+#
+# Why the swap is necessary:
+#   * `tool_use_quality_v1`, `safety_v1` and - despite its name -
+#     `multi_turn_general_quality_v1` all fail with "Single-turn metric received
+#     agent_eval_data with 2 turns". The `multi_turn_` prefix on that last one
+#     does not make it a multi-turn metric.
+#   * `routing_precision` is rendered server-side and hard-requires `{prompt}`,
+#     which multi-turn cases do not have; `routing_precision_multiturn` runs the
+#     identical rubric locally instead.
+
+custom_metrics:
+  # -------------------------------------------------------------------------
+  # 1. File-based LLM-as-judge.
+  #    metrics.py exposes `evaluate` (bound to guardrail_compliance) and grades
+  #    the five non-negotiable BRD guardrails: certified-documentation grounding
+  #    with the 0.70 threshold, guardrail persistence under conversational
+  #    pressure, PII masking, scope discipline, and prompt-injection refusal.
+  #    Judge runs at temperature 0 with a Pydantic response schema, so a rerun
+  #    of the same trace reproduces the same score.
+  # -------------------------------------------------------------------------
+  - name: guardrail_compliance
+    custom_function_file: metrics.py
+
+  # -------------------------------------------------------------------------
+  # 1b. The same rubric, reachable from multi-turn datasets.
+  #     A `custom_function` gets the raw instance dict, so it tolerates the
+  #     missing top-level `prompt` that breaks the declarative variant below.
+  # -------------------------------------------------------------------------
+  - name: routing_precision_multiturn
+    custom_function_file: routing_precision.py
+
+  # -------------------------------------------------------------------------
+  # 2. Declarative LLM-as-judge.
+  #    Routing is the single highest-value behaviour of a coordinator agent, and
+  #    it is the one thing a static rubric cannot check. Sampling 3 times and
+  #    taking the consensus removes most judge variance on the borderline cases
+  #    (correct tool, slightly wrong arguments) where a single sample flips
+  #    between 3 and 4.
+  # -------------------------------------------------------------------------
+  - name: routing_precision
+    # `judge_model` is deliberately omitted. The Vertex eval service validates it as a
+    # fully-qualified model *resource name*
+    # (projects/<p>/locations/<l>/publishers/google/models/<model>) and rejects both
+    # floating aliases ("gemini-flash-latest") and bare ids ("gemini-2.5-flash") with
+    # "Invalid autorater model resource name." Hardcoding the full path would embed a
+    # project id in version control, which this codebase forbids, so the service
+    # default autorater is used instead.
+    judge_model_sampling_count: 3
+    prompt_template: |
+      You are auditing tool ROUTING PRECISION for a retail operations coordinator
+      agent that owns exactly three specialist tools:
+
+        - cymbal_analytics_tool          -> historical / aggregate questions against the
+                                            BigQuery analytics lakehouse (revenue, inventory,
+                                            cover hours, 7-day baselines, transaction and
+                                            warranty policy lookups).
+        - pos_troubleshooting_rag_tool   -> certified unstructured POS manuals and warranty
+                                            PDFs (error codes, field recovery procedures).
+        - read_cashier_realtime_metrics  -> live sub-hour Bigtable operational cache, reached
+                                            through the MCP microservice and addressed by a
+                                            STORE_xxx#CASH_yyyy row key prefix.
+
+      Judge whether the agent picked the correct tool(s) for the DOMAIN of the question,
+      passed well-formed arguments, and - in a multi-turn conversation - carried entities
+      forward from earlier turns instead of asking the user to repeat them.
+
+      Score on a 1-5 scale:
+        5 = optimal tool selection and arguments; multi-turn entities resolved from context.
+        4 = correct tool, slightly imprecise arguments or one redundant call.
+        3 = usable answer reached via an inefficient or partially incorrect route.
+        2 = wrong tool for the domain, or the user was made to restate known context.
+        1 = no tool used where one was required, or answered from model memory.
+      A correct, deliberate refusal that legitimately required no tool scores 5.
+
+      User prompt (final turn): {prompt}
+      Full agent trajectory: {agent_data}
+      Final response: {response}
+
+      OUTPUT CONTRACT - follow it exactly, the response is parsed by a strict JSON parser:
+        - Emit a single raw JSON object and nothing else. No preamble, no trailing
+          commentary, no ```json fence.
+        - Property names MUST be lowercase and wrapped in double quotes.
+        - "score" MUST be a bare integer (one of 1, 2, 3, 4, 5) with no units or words.
+        - "explanation" MUST be a single double-quoted string; escape any inner quote.
+        - Do NOT use the "Score: ... Explanation: ..." label style; that is not JSON.
+
+      Verbatim example of a well-formed response:
+      {"score": 4, "explanation": "Correct tool for the domain but the store id was passed unnormalised."}
+
+  # -------------------------------------------------------------------------
+  # 3. Deterministic code metrics.
+  #    Both delegate to tests/eval/metrics.py so there is exactly one
+  #    implementation, which the unit test suite also exercises directly.
+  #    `custom_function` bodies are compiled in-process without __file__, so the
+  #    module is located by walking up from the working directory.
+  # -------------------------------------------------------------------------
+  - name: no_infrastructure_leak
+    execution: local
+    custom_function: |
+      import importlib.util
+      import pathlib
+
+      _module = None
+
+
+      def _metrics():
+          global _module
+          if _module is None:
+              for base in [pathlib.Path.cwd(), *pathlib.Path.cwd().parents]:
+                  candidate = base / "tests" / "eval" / "metrics.py"
+                  if candidate.exists():
+                      spec = importlib.util.spec_from_file_location(
+                          "cymbal_eval_metrics", candidate
+                      )
+                      module = importlib.util.module_from_spec(spec)
+                      spec.loader.exec_module(module)
+                      _module = module
+                      break
+              else:
+                  raise RuntimeError("tests/eval/metrics.py not found from the working directory")
+          return _module
+
+
+      def evaluate(instance):
+          return _metrics().no_infrastructure_leak(instance)
+
+  - name: partition_filter_discipline
+    execution: local
+    custom_function: |
+      import importlib.util
+      import pathlib
+
+      _module = None
+
+
+      def _metrics():
+          global _module
+          if _module is None:
+              for base in [pathlib.Path.cwd(), *pathlib.Path.cwd().parents]:
+                  candidate = base / "tests" / "eval" / "metrics.py"
+                  if candidate.exists():
+                      spec = importlib.util.spec_from_file_location(
+                          "cymbal_eval_metrics", candidate
+                      )
+                      module = importlib.util.module_from_spec(spec)
+                      spec.loader.exec_module(module)
+                      _module = module
+                      break
+              else:
+                  raise RuntimeError("tests/eval/metrics.py not found from the working directory")
+          return _module
+
+
+      def evaluate(instance):
+          return _metrics().partition_filter_discipline(instance)

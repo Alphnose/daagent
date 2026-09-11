@@ -1,0 +1,267 @@
+
+==============================================================================
+[Cost & Token Analysis] Aggregate total input tokens and output tokens and request count grouped by model (model).
+==============================================================================
+Analyzing context
+Retrieved context for 26 tables.
+Running a query
+SELECT COALESCE(model_version, 'unknown') AS model,
+       COUNT(*) AS request_count,
+       SUM(usage_prompt_tokens) AS total_input_tokens,
+       SUM(usage_completion_tokens) AS total_output_tokens,
+       SUM(usage_total_tokens) AS total_tokens
+FROM `antigravity-503007.agent_telemetry.v_llm_response`
+WHERE timestamp >= TIMESTAMP_SUB(TIMESTAMP '2026-09-11 04:46:02 UTC', INTERVAL 7 DAY)
+GROUP BY model
+ORDER BY request_count DESC
+Query execution completed
+Query returned 1 row in 1.71s.
+I assumed a default time window of the last 7 days to optimize partition pruning on the telemetry table. Let me know if you would like to analyze a different timeframe.
+Here is the aggregated request count, total input tokens, and total output tokens grouped by model for the last 7 days:
+
+  --- Generated GoogleSQL ---
+  SELECT COALESCE(model_version, 'unknown') AS model,
+         COUNT(*) AS request_count,
+         SUM(usage_prompt_tokens) AS total_input_tokens,
+         SUM(usage_completion_tokens) AS total_output_tokens,
+         SUM(usage_total_tokens) AS total_tokens
+  FROM `antigravity-503007.agent_telemetry.v_llm_response`
+  WHERE timestamp >= TIMESTAMP_SUB(TIMESTAMP '2026-09-11 04:46:02 UTC', INTERVAL 7 DAY)
+  GROUP BY model
+  ORDER BY request_count DESC
+
+  --- Result rows: 1 ---
+  {'total_input_tokens': 182316, 'model': 'gemini-3.6-flash', 'total_output_tokens': 13656, 'total_tokens': 231054, 'request_count': 80}
+### Model Usage Summary
+All 80 LLM requests in the past 7 days were handled by `gemini-3.6-flash`, generating **182,316 input tokens** and **13,656 output tokens** (totaling 231,054 tokens including cached/system overhead).
+Break down token usage and request count by agent.
+Show hourly LLM request latency and token throughput trends over the last 7 days.
+Detect anomalies in LLM response latency and token consumption across sessions.
+
+==============================================================================
+[Tool Performance & Latency] Calculate the average and maximum execution latency per tool, sorted by the slowest tools first.
+==============================================================================
+Analyzing context
+Retrieving context for 26 tables.
+Context retrieved
+Retrieved context for 26 tables.
+Running a query
+SELECT tool_name,
+       ROUND(AVG(total_ms)) AS avg_latency_ms,
+       MAX(total_ms) AS max_latency_ms
+FROM `antigravity-503007.agent_telemetry.v_tool_completed`
+WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+GROUP BY tool_name
+ORDER BY avg_latency_ms DESC
+Query execution completed
+Query returned 3 rows in 1.40s.
+I assumed a default evaluation window of the last 7 days (since 2026-09-04) to prune the partitions.
+The table below shows the average and maximum execution latencies per tool over the last 7 days, ordered by average latency descending:
+
+  --- Generated GoogleSQL ---
+  SELECT tool_name,
+         ROUND(AVG(total_ms)) AS avg_latency_ms,
+         MAX(total_ms) AS max_latency_ms
+  FROM `antigravity-503007.agent_telemetry.v_tool_completed`
+  WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+  GROUP BY tool_name
+  ORDER BY avg_latency_ms DESC
+
+  --- Result rows: 3 ---
+  {'avg_latency_ms': 17513, 'max_latency_ms': 64718, 'tool_name': 'cymbal_analytics_tool'}
+  {'tool_name': 'read_cashier_realtime_metrics', 'max_latency_ms': 15443, 'avg_latency_ms': 6043}
+  {'max_latency_ms': 4140, 'avg_latency_ms': 2857, 'tool_name': 'pos_troubleshooting_rag_tool'}
+Group the tool executions by day to see latency trends over the last 7 days.
+Identify any tool execution errors that occurred in the last 7 days.
+
+==============================================================================
+[Reliability & Error Analysis] Find all failed tool calls or sessions with errors, showing the session ID, tool name, and error message.
+==============================================================================
+Analyzing context
+Retrieved context for 26 tables.
+Running a query
+SELECT session_id,
+       tool_name,
+       error_message, timestamp
+FROM `antigravity-503007.agent_telemetry.v_tool_error`
+WHERE timestamp >= TIMESTAMP_SUB(TIMESTAMP('2026-09-11 04:46:27'), INTERVAL 7 DAY)
+UNION ALL
+SELECT session_id,
+       CAST(NULL AS STRING) AS tool_name,
+       error_message, timestamp
+FROM `antigravity-503007.agent_telemetry.v_agent_error`
+WHERE timestamp >= TIMESTAMP_SUB(TIMESTAMP('2026-09-11 04:46:27'), INTERVAL 7 DAY)
+UNION ALL
+SELECT session_id,
+       CAST(NULL AS STRING) AS tool_name,
+       error_message, timestamp
+FROM `antigravity-503007.agent_telemetry.v_invocation_error`
+WHERE timestamp >= TIMESTAMP_SUB(TIMESTAMP('2026-09-11 04:46:27'), INTERVAL 7 DAY)
+ORDER BY timestamp DESC
+Query execution completed
+Query returned 0 rows in 1.54s.
+Running a query
+SELECT session_id,
+       tool_name,
+       error_message, timestamp
+FROM `antigravity-503007.agent_telemetry.v_tool_error`
+UNION ALL
+SELECT session_id,
+       CAST(NULL AS STRING) AS tool_name,
+       error_message, timestamp
+FROM `antigravity-503007.agent_telemetry.v_agent_error`
+UNION ALL
+SELECT session_id,
+       CAST(NULL AS STRING) AS tool_name,
+       error_message, timestamp
+FROM `antigravity-503007.agent_telemetry.v_invocation_error`
+ORDER BY timestamp DESC
+Query execution completed
+Query returned 0 rows in 1.15s.
+Running a query
+SELECT session_id,
+       event_type,
+       error_message,
+       status, timestamp
+FROM `antigravity-503007.agent_telemetry.events`
+WHERE status = 'ERROR'
+  OR error_message IS NOT NULL
+ORDER BY timestamp DESC
+Query execution completed
+Query returned 2 rows in 980ms.
+Running a query
+SELECT session_id,
+       tool_name,
+       error_message,
+       status, timestamp
+FROM
+  (-- Failed tool calls
+ SELECT session_id,
+        tool_name,
+        error_message,
+        status, timestamp
+   FROM `antigravity-503007.agent_telemetry.v_tool_error`
+   UNION ALL -- Sessions / Invocations / Agent level errors
+ SELECT session_id,
+        CAST(NULL AS STRING) AS tool_name,
+        error_message,
+        status, timestamp
+   FROM `antigravity-503007.agent_telemetry.v_agent_error`
+   UNION ALL SELECT session_id,
+                    CAST(NULL AS STRING) AS tool_name,
+                    error_message,
+                    status, timestamp
+   FROM `antigravity-503007.agent_telemetry.v_invocation_error`
+   UNION ALL -- Events with error status or populated error message across all lifecycle events
+ SELECT session_id,
+        CAST(NULL AS STRING) AS tool_name,
+        error_message,
+        status, timestamp
+   FROM `antigravity-503007.agent_telemetry.events`
+   WHERE status = 'ERROR'
+     OR (error_message IS NOT NULL
+         AND TRIM(error_message) != '') ) QUALIFY ROW_NUMBER() OVER(PARTITION BY session_id, tool_name, error_message, timestamp
+                                                                    ORDER BY timestamp) = 1
+ORDER BY timestamp DESC
+Query execution completed
+Query returned 2 rows in 1.28s.
+I checked across all tool error views (`v_tool_error`), session/invocation/agent error views (`v_agent_error`, `v_invocation_error`), and general telemetry events for any recorded errors or failed tool executions.
+There were **no failed tool calls** recorded in the telemetry. However, 2 sessions encountered errors due to safety-blocked LLM prompts:
+
+* **Session `7ba3fa7f-5b61-4047-972d-6cd8a97a338d`**: Prompt blocked due to safety (LLM response error).
+* **Session `21d44e20-c855-4247-85be-4906ed0e0f2b`**: Prompt blocked due to safety (LLM response error).
+
+  --- Generated GoogleSQL ---
+  SELECT session_id,
+         tool_name,
+         error_message,
+         status, timestamp
+  FROM
+    (-- Failed tool calls
+   SELECT session_id,
+          tool_name,
+          error_message,
+          status, timestamp
+     FROM `antigravity-503007.agent_telemetry.v_tool_error`
+     UNION ALL -- Sessions / Invocations / Agent level errors
+   SELECT session_id,
+          CAST(NULL AS STRING) AS tool_name,
+          error_message,
+          status, timestamp
+     FROM `antigravity-503007.agent_telemetry.v_agent_error`
+     UNION ALL SELECT session_id,
+                      CAST(NULL AS STRING) AS tool_name,
+                      error_message,
+                      status, timestamp
+     FROM `antigravity-503007.agent_telemetry.v_invocation_error`
+     UNION ALL -- Events with error status or populated error message across all lifecycle events
+   SELECT session_id,
+          CAST(NULL AS STRING) AS tool_name,
+          error_message,
+          status, timestamp
+     FROM `antigravity-503007.agent_telemetry.events`
+     WHERE status = 'ERROR'
+       OR (error_message IS NOT NULL
+           AND TRIM(error_message) != '') ) QUALIFY ROW_NUMBER() OVER(PARTITION BY session_id, tool_name, error_message, timestamp
+                                                                      ORDER BY timestamp) = 1
+  ORDER BY timestamp DESC
+
+  --- Result rows: 2 ---
+  {'status': 'OK', 'error_message': 'The prompt is blocked due to safety', 'timestamp': '2026-09-11 04:36:25', 'tool_name': None, 'session_id': '7ba3fa7f-5b61-4047-972d-6cd8a97a338d'}
+  {'error_message': 'The prompt is blocked due to safety', 'timestamp': '2026-09-11 04:31:12', 'tool_name': None, 'session_id': '21d44e20-c855-4247-85be-4906ed0e0f2b', 'status': 'OK'}
+Break down errors by event type and model version.
+List all successful tool calls with their average latency in milliseconds.
+Show the token usage and distribution for sessions with safety-blocked prompts.
+
+==============================================================================
+[Tool Invocations Distribution] Show the top 3 most frequently invoked tools and their percentage distribution.
+==============================================================================
+Analyzing context
+Retrieved context for 26 tables.
+Running a query
+WITH tool_counts AS
+  (SELECT tool_name,
+          COUNT(*) AS invocation_count
+   FROM `antigravity-503007.agent_telemetry.v_tool_starting`
+   WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+   GROUP BY tool_name),
+     total AS
+  (SELECT SUM(invocation_count) AS total_invocations
+   FROM tool_counts)
+SELECT tc.tool_name,
+       tc.invocation_count,
+       ROUND(SAFE_DIVIDE(tc.invocation_count, t.total_invocations) * 100, 2) AS percentage
+FROM tool_counts tc,
+     total t
+ORDER BY tc.invocation_count DESC
+LIMIT 3
+Query execution completed
+Query returned 3 rows in 1.47s.
+I applied a default time window of the last 7 days (since September 4, 2026) to prune partition data and ensure optimal query performance.
+The top 3 most frequently invoked tools over the last 7 days are **pos_troubleshooting_rag_tool** (44.44%), **cymbal_analytics_tool** (41.67%), and **read_cashier_realtime_metrics** (13.89%).
+
+  --- Generated GoogleSQL ---
+  WITH tool_counts AS
+    (SELECT tool_name,
+            COUNT(*) AS invocation_count
+     FROM `antigravity-503007.agent_telemetry.v_tool_starting`
+     WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+     GROUP BY tool_name),
+       total AS
+    (SELECT SUM(invocation_count) AS total_invocations
+     FROM tool_counts)
+  SELECT tc.tool_name,
+         tc.invocation_count,
+         ROUND(SAFE_DIVIDE(tc.invocation_count, t.total_invocations) * 100, 2) AS percentage
+  FROM tool_counts tc,
+       total t
+  ORDER BY tc.invocation_count DESC
+  LIMIT 3
+
+  --- Result rows: 3 ---
+  {'invocation_count': 16, 'tool_name': 'pos_troubleshooting_rag_tool', 'percentage': 44.44}
+  {'invocation_count': 15, 'tool_name': 'cymbal_analytics_tool', 'percentage': 41.67}
+  {'invocation_count': 5, 'percentage': 13.89, 'tool_name': 'read_cashier_realtime_metrics'}
+Show the average execution latency for each of the top 3 tools over the last 7 days.
+Detect latency anomalies in pos_troubleshooting_rag_tool invocations over the last 7 days.
+List the error messages and failure counts associated with tool execution errors in the last 7 days.
