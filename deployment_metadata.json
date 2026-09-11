@@ -4,12 +4,5 @@
   "is_a2a": true,
   "language": "python",
   "agent_directory": "app",
-  "deployment_timestamp": "2026-09-11T04:56:42.232673+00:00",
-  "pending_operation": {
-    "operation_name": "projects/423750061893/locations/us-central1/reasoningEngines/512334485392457728/operations/7310435337413591040",
-    "project": "antigravity-503007",
-    "location": "us-central1",
-    "deployment_target": "agent_runtime",
-    "started_at": "2026-09-11T05:24:36.271746+00:00"
-  }
+  "deployment_timestamp": "2026-09-11T05:27:02.833742+00:00"
 }

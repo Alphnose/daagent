@@ -324,7 +324,19 @@ for Cymbal Superstore POS operations. No troubleshooting guidance can be provide
 
 ## 後續建議
 
-1. 重新提交評測伺服器：`https://elevate-evaluation-preprod.aishprabhat.demo.altostrat.com/?track=data`（`track=data`）。
-2. 未追蹤的筆記 `day3lab3.md`、`day3lab302.md` 目前未納入 commit，可視需要一併加入。
+1. ~~重新提交評測伺服器：`https://elevate-evaluation-preprod.aishprabhat.demo.altostrat.com/?track=data`（`track=data`）。~~
+   **已於 2026-09-11 由使用者自行完成提交。**
+2. ~~未追蹤的筆記 `day3lab3.md`、`day3lab302.md` 目前未納入 commit，可視需要一併加入。~~
+   **已納入版控。**
 3. 若要在 CI 執行，設定 `BIGTABLE_MCP_REQUIRED=true` 可確保 MCP 路徑失效時直接讓建置失敗，
    而非靜默降級。
+
+---
+
+## 相關文件
+
+- **`day4m3-divergences.md`** — Day 4 / Module 3 實作與教材說明的 16 項差異清單
+  （評測 harness 行為、Agent Runtime 命名、Gemini Enterprise 授權與 `appType` 陷阱等），
+  每一項都附上根因與可直接套用的指令。
+- `tests/eval/evaluation_report.md` — Challenge 2.2 的評測報告，含 3 個由評測套件
+  實際攔截到的 agent 缺陷與 4 個指標誤判的校正過程。
