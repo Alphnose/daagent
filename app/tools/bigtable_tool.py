@@ -6,6 +6,10 @@ from typing import Dict, Any, Optional
 from google.cloud import bigtable
 from google.cloud.bigtable.row_set import RowSet
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 PROJECT_ID = os.environ.get("PROJECT_ID", "antigravity-503007")
 BIGTABLE_INSTANCE_ID = os.environ.get("BIGTABLE_INSTANCE_ID", "operations-db")
 BIGTABLE_TABLE_ID = os.environ.get("BIGTABLE_TABLE_ID", "cashier_realtime_alerts")
@@ -37,13 +41,15 @@ def read_cashier_realtime_metrics(store_id: str, cashier_id: str) -> str:
         cashier_id = f"CASH_{cashier_id}"
         
     prefix = f"{store_id}#{cashier_id}"
-    table = get_table()
-    
-    row_set = RowSet()
-    row_set.add_row_range_with_prefix(prefix)
-    
-    # Read the latest alert record (Bigtable row keys have reverse timestamps, so first match is newest)
-    rows = list(table.read_rows(row_set=row_set, limit=1))
+    try:
+        table = get_table()
+        row_set = RowSet()
+        row_set.add_row_range_with_prefix(prefix)
+        # Read the latest alert record (Bigtable row keys have reverse timestamps, so first match is newest)
+        rows = list(table.read_rows(row_set=row_set, limit=1))
+    except Exception as e:
+        logger.error("Bigtable query failed for prefix %s: %s", prefix, e)
+        return "The requested Bigtable store data is currently unreachable due to a temporary service failure. Please try again later."
     if not rows:
         return f"No realtime records found in Bigtable for cashier '{cashier_id}' at store '{store_id}'."
         

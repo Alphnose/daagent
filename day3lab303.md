@@ -87,9 +87,38 @@
 | Use Case | 測試情境與 Prompt | 預期工具與行為 | 實際執行結果與驗證狀態 (gemini-3.6-flash) |
 | :--- | :--- | :--- | :--- |
 | **UC 1.1a** | *What is the immediate field recovery protocol when a cashier encounters an ERR-PAY-4001 EMV contactless payment freeze, and how do we ensure the customer is not double-charged?* | `pos_troubleshooting_rag_tool`: 回傳 Toshiba TCx 810 拼接手冊與 HTTPS 連結 | **PASSED** ✅<br>- 調用 `pos_troubleshooting_rag_tool`<br>- 精確列出黃色鍵+#重啟、Journal Audit Slip 確認 `AUTHORIZED_UNSETTLED`<br>- 附上 HTTPS 認證手冊連結 |
-| **UC 1.1c** | *How do I replace the engine oil on a Ford F-150 truck?* | `pos_troubleshooting_rag_tool` / guardrail: 觸發安全警告回退 | **PASSED** ✅<br>- 意圖 guardrail 精確識別超出 Cymbal POS 與門市營運範圍並禮貌拒絕 |
+| **UC 1.1c** | *How do I replace the engine oil on a Ford F-150 truck?* | `pos_troubleshooting_rag_tool` / guardrail: 觸發安全警告回退 | **PASSED** ✅<br>- 觸發標準拒絕字串：`WARNING: No certified POS troubleshooting documentation or procedural runbooks matched your query with sufficient confidence (similarity >= 0.70).` |
 | **UC 1.2a** | *What is the estimated cover hours remaining for store inventory positions experiencing stockout risk of less than 20 hours, and what is their total on-hand inventory?* | `cymbal_analytics_tool`: 查詢 `gold_inventory_reconciliation_ledger` | **PASSED** ✅<br>- 調用 `cymbal_analytics_tool`<br>- 成功檢索缺貨風險低於 20 小時品項與在手庫存清單 |
 | **UC 1.3** | *Read live 1-hour rolling metrics and audit status flags for Cashier CASH_1190 at Store 48.* | `bigtable_mcp_toolset`: 讀取 Bigtable 前綴資料 | **PASSED** ✅<br>- 調用 `read_cashier_realtime_metrics({'cashier_id': 'CASH_1190', 'store_id': 'STORE_048'})`<br>- 成功取得 1 小時交易數 (51)、覆寫數 (27)、折扣金額 ($13,887.59) 與 `clear` 狀態 |
 | **UC 2.1a** | *Check transaction details for TXN-20260312-0015811 and show the warranty coverage policy for the purchased item.* | `cymbal_analytics_tool`: 展開品項並關聯保固條款 | **PASSED** ✅<br>- 調用 `cymbal_analytics_tool` 與 `pos_troubleshooting_rag_tool`<br>- 成功查詢交易記錄（Samsung Galaxy Watch4 Classic, $222.99）與 24 個月保固條款詳情 |
 | **UC 2.2** | *What is Cashier CASH_1190's live 1-hour override rate right now, compared to their 7-day historical override baseline?* | **PARALLEL DISPATCH**: 同時調用 Bigtable 與 BigQuery | **PASSED** ✅<br>- ADK Trace 證實**平行調度**（Parallel Dispatch）：<br>  1. `read_cashier_realtime_metrics`<br>  2. `cymbal_analytics_tool`<br>- 綜合對比：即時覆寫率 52.94% (27/51) vs 7 天歷史基準 55.6% (399/717)，自動生成 SQL 稽核日誌與風險評估報告 |
 | **UC 2.3** | *Show cashiers with active cashier promo abuse alerts in the last 7 days and retrieve checkout logs for the top offender.* | **SEQUENTIAL DISPATCH**: Turn 1 GCP 異常排名 -> Turn 2 AWS S3 日誌 | **PASSED** ✅<br>- ADK Trace 證實**循序多輪調度**（Sequential Dispatch）：<br>  1. Turn 1 查出首犯 CASH_1190 (335 則告警，風險分數 1.0)<br>  2. Turn 2 調取該收銀員之 AWS S3 checkout logs (`silver_pos_transactions`) 並提供行動防護建議 |
+
+---
+
+## 🛡️ Part 5: Feedback Remediation & Quality Audit (Completed & 100% Passed)
+
+依據 `feedback.txt` 評審反饋，已全數修復以下 7 大面向缺失：
+
+1. **ADK McpToolset 架構整合 (`app/tools/bigtable_mcp_tool.py`)**:
+   - 實作第一類公民 `BigtableOperationsToolset(BaseToolset)`，直接封裝 `create_bigtable_mcp_toolset()`。
+   - 統一 `SseConnectionParams` 與 OIDC ID Token Bearer 授權，杜絕死碼與繞道問題。
+   - 擴充 `tools.yaml`，包含宣告式 `sources` (Bigtable) 與 `tools` (`read_cashier_realtime_metrics`) 範本定義。
+2. **標準 RAG 低分拒絕字串 (`app/tools/rag_tool.py`)**:
+   - 實作標準強制警告字串 `MANDATORY_DECLINE_WARNING`：
+     `WARNING: No certified POS troubleshooting documentation or procedural runbooks matched your query with sufficient confidence (similarity >= 0.70)...`
+   - 修復 SEARCH 回退查詢對 `ERR-PAY-4001` 等帶連字號錯誤代碼之反引號跳脫機制。
+3. **分區日期釐清護欄 (`app/prompts.py`)**:
+   - 在 `COORDINATOR_SYSTEM_INSTRUCTION` 加入 `Partition Date Clarification Guardrail`，強制對交易/日誌表查詢前確認日期區間或鎖定 rolling 視窗，嚴禁全表掃描。
+4. **全工具連線與基礎設施例外遮罩 (Exception Masking)**:
+   - 全面引入 `logging` 模組，將內部 GCP 堆疊日誌、服務帳號及內部路徑遮蔽，統一對外回傳乾淨的服務故障友善訊息。
+5. **標準化 Pytest 測試套件 (`tests/test_operational_use_cases.py`)**:
+   - 建立包含嚴格 `assert` 的自動化測試套件，涵蓋 RAG 檢索、低分拒絕、Data Agent 分析、Bigtable 即時指標與 Coordinator Agent 綁定。
+   - 重構 `run_all_tests.py`，加入全情境輸出完整性與無異常洩漏之嚴格斷言。
+6. **環境可移植性與部署產物**:
+   - 新增 `Dockerfile` (Python 3.11-slim, EXPOSE 8080, 健康檢查)。
+   - 新增 `Makefile` (targets: `setup`, `install`, `test`, `test-e2e`, `run-web`, `clean`)。
+   - 撰寫結構化 `README.md` (架構圖、安裝步驟、安全防護與情境驗證手冊)。
+7. **測試驗證通過率**:
+   - `make test`: **6 passed in 25.99s** (100% 通過)
+   - `make test-e2e`: **All 7 use cases verified with strict assertions** (100% 通過)

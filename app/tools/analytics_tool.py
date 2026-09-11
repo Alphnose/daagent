@@ -8,6 +8,10 @@ from google.auth.transport.requests import Request
 from google.adk.tools import FunctionTool
 from google.adk.tools.data_agent.data_agent_tool import ask_data_agent, DataAgentToolConfig
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 DATA_AGENT_NAME = os.environ.get(
     "DATA_AGENT_NAME",
     "projects/antigravity-503007/locations/global/dataAgents/cymbal-retail-analytics-data-agent"
@@ -82,12 +86,15 @@ def cymbal_analytics_tool(query: str) -> str:
                 return "\n".join(output_parts)
             else:
                 last_error = f"Data Agent status: {result.get('status')}, response: {result.get('response')}"
+                logger.warning("Data Agent returned non-success status on attempt %d: %s", attempt + 1, last_error)
         except Exception as e:
             last_error = str(e)
+            logger.warning("Error connecting to Data Agent on attempt %d: %s", attempt + 1, e)
             
         time.sleep(base_delay * (2 ** attempt))
         
-    return f"Store data is currently unreachable. Error connecting to BigQuery Data Agent: {last_error}"
+    logger.error("All %d retries failed connecting to Data Agent. Last internal error: %s", max_retries, last_error)
+    return "Store data is currently unreachable due to a temporary service failure. Please verify your query or try again later."
 
 # Explicit FunctionTool instance as recommended by ADK guidelines
 analytics_function_tool = FunctionTool(cymbal_analytics_tool)

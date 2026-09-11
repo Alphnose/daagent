@@ -4,7 +4,17 @@ import os
 from typing import Optional
 from google.cloud import bigquery
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 PROJECT_ID = os.environ.get("PROJECT_ID", "antigravity-503007")
+
+# Mandatory standardized decline warning string when similarity is below 0.70 threshold
+MANDATORY_DECLINE_WARNING = (
+    "WARNING: No certified POS troubleshooting documentation or procedural runbooks matched your query "
+    "with sufficient confidence (similarity >= 0.70). Query fell back to uncertified results or no matches were found."
+)
 
 _bq_client = None
 
@@ -22,9 +32,13 @@ def pos_troubleshooting_rag_tool(query: str, store_model_context: Optional[str] 
         store_model_context: Optional specific hardware model or store context (e.g. 'Toshiba TCx 810', 'HP Engage One').
         
     Returns:
-        Relevant manual sections with stitched context windows (N-1 ~ N+1), similarity scores, and documentation links.
+        Relevant manual sections with stitched context windows (N-1 ~ N+1), similarity scores, and documentation links, or certified decline warning if similarity < 0.70.
     """
-    client = get_bq_client()
+    try:
+        client = get_bq_client()
+    except Exception as e:
+        logger.error("Failed to initialize BigQuery client in pos_troubleshooting_rag_tool: %s", e)
+        return "The requested data source is currently unreachable due to a temporary service failure. Please try again later."
     
     # Vector search query with window stitching (N-1, N, N+1) and threshold >= 0.70
     vector_sql = f"""
@@ -74,18 +88,20 @@ def pos_troubleshooting_rag_tool(query: str, store_model_context: Optional[str] 
     try:
         results = list(client.query(vector_sql, job_config=job_config).result())
     except Exception as e:
+        logger.warning("Vector search query failed or timed out: %s", e)
         results = []
     
     # If no results meet the 0.70 threshold or specific error code pattern, fallback to full-text SEARCH
     if not results:
-        # Clean query for SEARCH: escape dashed error tokens
-        search_terms = []
-        for token in query.replace("'", " ").replace('"', " ").split():
-            if "-" in token:
-                search_terms.append(f'\\"{token}\\"')
-            else:
-                search_terms.append(token)
-        search_query_str = " ".join(search_terms) if search_terms else query
+        # Clean query for SEARCH: extract error codes (e.g. ERR-PAY-4001) or specific diagnostic codes
+        import re
+        error_codes = re.findall(r"[A-Za-z0-9]+-[A-Za-z0-9-]+", query)
+        if error_codes:
+            search_query_str = f"`{error_codes[0]}`"
+        else:
+            # Fallback to key alphabetic tokens
+            key_tokens = [w for w in re.findall(r"[A-Za-z0-9]+", query) if len(w) > 3 and w.lower() not in {"what", "when", "where", "which", "with", "from", "that", "this", "have", "ensure", "customer", "immediate", "field"}]
+            search_query_str = " ".join(key_tokens[:3]) if key_tokens else query
         
         fallback_sql = f"""
         WITH text_matches AS (
@@ -120,11 +136,12 @@ def pos_troubleshooting_rag_tool(query: str, store_model_context: Optional[str] 
         )
         try:
             results = list(client.query(fallback_sql, job_config=fb_config).result())
-        except Exception:
+        except Exception as e:
+            logger.warning("Fallback full-text search query failed: %s", e)
             results = []
             
     if not results:
-        return f"No troubleshooting documentation found with similarity >= 0.70 for query: '{query}'."
+        return f"{MANDATORY_DECLINE_WARNING} (Query: '{query}', max_similarity < 0.70)"
         
     formatted_sections = []
     for row in results:

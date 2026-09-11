@@ -1,0 +1,33 @@
+The candidate's implementation shows high structural drift and unfulfilled commitments compared to the target operational specifications. The Text-to-SQL analytics and vector RAG troubleshooting flows are statically in place but miss important guardrails, such as outputting the exact mandatory warning string on low-confidence RAG returns and implementing the partition date clarification check. Architecturally, the declarative database MCP server pattern was completely bypassed and replaced with direct Python client query range scans. Moreover, crucial deployment and verification assets, such as a Dockerfile, build Makefile, and standard test assertions, are entirely missing.
+
+Critical Gaps & Risks
+Complete bypass of McpToolset database server, rendering tools.yaml dead config
+No standard exception masking in analytics_tool.py leading to infrastructure leakage on connection faults
+Absence of standard test suite assertions in run_all_tests.py
+Missing container specifications (Dockerfile), build scripts (Makefile), and deployment manifests
+Total omission of partition date verification guardrails inside coordinator prompt bindings
+Actionable Recommendations & Remediation Plan
+Restore ADK McpToolset in bigtable_mcp_tool.py to connect correctly to the central Cloud Run SSE endpoint.
+Update rag_tool.py to output the exact mandatory decline string when RAG query scores fall below 0.70.
+Enforce the Partition Clarification Guardrail inside prompts.py to prompt users for date ranges before querying BQ transactional tables.
+Mask internal paths and connection stack trace dumps under standard error wrappers inside tool call catches.
+Replace assert-less print logs inside run_all_tests.py with pytest-assert testing blocks.
+Formulate a standard Dockerfile container wrap alongside a build automation Makefile for environment portability.
+
+
+
+Identified Gaps & Risks
+Bypassed McpToolset and tools.yaml declarative templates
+Ad-hoc gRPC client library scans utilized instead of bigtable-sql MCP engine
+Missing README setup and maintenance runbooks
+Unreferenced dead code in bigtable_mcp_tool.py
+Incorrect warning string on RAG decline fallback (below 0.70 similarity)
+Absence of dynamic partition date clarification bounds inside systems prompts
+Connection error leakages inside tools exception catches
+Hardcoded Data Agent resource path prevents environment portability
+Registered Tool configuration schema bypasses declarative tool contract template definitions
+Completely missing Docker container configs (Dockerfile)
+No deployment automation setups (Makefile or Terraform scripts)
+Absence of a standard logging package schema setup
+Standard test suite checks are assert-less, providing false confidence blocks
+Zero test coverage or GDS check telemetry setup

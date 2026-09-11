@@ -3,3 +3,16 @@ sources:
     kind: bigtable
     project: antigravity-503007
     instance: operations-db
+
+tools:
+  read_cashier_realtime_metrics:
+    kind: bigtable-sql
+    source: bigtable_source
+    description: "Reads live 1-hour rolling metrics, anomaly risk score, and audit status flags for a cashier from Cloud Bigtable table cashier_realtime_alerts."
+    parameters:
+      store_id:
+        type: string
+        description: "Store identifier, e.g. STORE_048"
+      cashier_id:
+        type: string
+        description: "Cashier identifier, e.g. CASH_1190"
